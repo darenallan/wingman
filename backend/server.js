@@ -1,10 +1,13 @@
 import express from 'express';
-import cors from 'cors';
 import dotenv from 'dotenv';
 import pkg from 'pg';
 import path from 'path';
 import { readFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
+import {
+  COOKIE_NAME, checkConfig, passwordMatches, createSession, verifySession, readCookie,
+  sessionCookie, clearedCookie, createLimiter, sameOrigin,
+} from './security.js';
 const { Pool } = pkg;
 
 dotenv.config();
@@ -12,9 +15,30 @@ dotenv.config();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_DIST = path.join(__dirname, '../frontend/dist');
 
+// Sans mot de passe ni secret, l'API serait ouverte à tous : on refuse de démarrer.
+const configProblems = checkConfig(process.env);
+if (configProblems.length) {
+  console.error(`Configuration invalide :\n- ${configProblems.join('\n- ')}`);
+  process.exit(1);
+}
+const PASSWORD = process.env.WINGMAN_PASSWORD;
+const SECRET = process.env.SESSION_SECRET;
+const SECURE_COOKIE = process.env.NODE_ENV === 'production';
+
 const app = express();
-app.use(cors());
-app.use(express.json());
+app.disable('x-powered-by');
+// Render place l'app derrière un proxy : req.ip doit être l'IP du client, pas celle du proxy.
+app.set('trust proxy', 1);
+app.use((req, res, next) => {
+  res.set({
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'no-referrer',
+  });
+  next();
+});
+// Pas de CORS : le front est servi par ce même serveur (et par le proxy Vite en dev).
+app.use(express.json({ limit: '32kb' }));
 
 // Sert le build statique du frontend React
 app.use(express.static(FRONTEND_DIST));
@@ -291,16 +315,65 @@ async function callAI({ context, herMessage, vibe, stage, regenerate, previousRe
   return JSON.parse(content);
 }
 
+// ─── Accès ────────────────────────────────────────────────
+const loginLimiter = createLimiter({ max: 5, windowMs: 15 * 60_000 });          // par IP
+const generateLimiter = createLimiter({ max: 30, windowMs: 10 * 60_000 });      // par IP
+const dailyLimiter = createLimiter({ max: Number(process.env.GENERATE_DAILY_LIMIT) || 300, windowMs: 86_400_000 }); // global : borne la facture d'IA
+const MAX_TEXT = 4000;
+
+function tooMany(res, retryAfter) {
+  res.set('Retry-After', String(retryAfter));
+  return res.status(429).json({ error: 'Trop de requêtes, réessaie plus tard.' });
+}
+
+function requireAuth(req, res, next) {
+  if (!sameOrigin(req)) return res.status(403).json({ error: 'Origine refusée.' });
+  if (!verifySession(readCookie(req.headers.cookie, COOKIE_NAME), SECRET)) {
+    return res.status(401).json({ error: 'Connexion requise.' });
+  }
+  next();
+}
+
+app.get('/api/session', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ authenticated: verifySession(readCookie(req.headers.cookie, COOKIE_NAME), SECRET) });
+});
+
+app.post('/api/login', (req, res) => {
+  if (!sameOrigin(req)) return res.status(403).json({ error: 'Origine refusée.' });
+  const limit = loginLimiter(req.ip);
+  if (!limit.ok) return tooMany(res, limit.retryAfter);
+  if (!passwordMatches(req.body?.password, PASSWORD)) {
+    return res.status(401).json({ error: 'Mot de passe incorrect.' });
+  }
+  res.set('Set-Cookie', sessionCookie(createSession(SECRET), { secure: SECURE_COOKIE }));
+  res.json({ ok: true });
+});
+
+app.post('/api/logout', (req, res) => {
+  res.set('Set-Cookie', clearedCookie({ secure: SECURE_COOKIE }));
+  res.json({ ok: true });
+});
+
 // Route principale pour générer la réponse
-app.post('/api/generate', async (req, res) => {
+app.post('/api/generate', requireAuth, async (req, res) => {
+  const perIp = generateLimiter(req.ip);
+  if (!perIp.ok) return tooMany(res, perIp.retryAfter);
+  const daily = dailyLimiter('all');
+  if (!daily.ok) return tooMany(res, daily.retryAfter);
+
   const { context, herMessage, vibe, regenerate } = req.body;
   const stage = STAGES[req.body.stage] ? req.body.stage : DEFAULT_STAGE;
   const previousReplies = Array.isArray(req.body.previousReplies)
-    ? req.body.previousReplies.filter(r => typeof r === 'string').slice(0, 8)
+    ? req.body.previousReplies.filter(r => typeof r === 'string').slice(0, 8).map(r => r.slice(0, 500))
     : [];
 
-  if (!herMessage) {
+  if (typeof herMessage !== 'string' || !herMessage.trim()) {
     return res.status(400).json({ error: "Le message reçu est requis." });
+  }
+  if (herMessage.length > MAX_TEXT || (context != null && (typeof context !== 'string' || context.length > MAX_TEXT))
+      || (vibe != null && (typeof vibe !== 'string' || vibe.length > 50))) {
+    return res.status(400).json({ error: "Message, contexte ou ton trop long ou invalide." });
   }
 
   try {
@@ -323,11 +396,13 @@ app.post('/api/generate', async (req, res) => {
 });
 
 // Route pour noter une réponse (👍 = 1, 👎 = -1)
-app.post('/api/feedback', async (req, res) => {
+app.post('/api/feedback', requireAuth, async (req, res) => {
   const { vibe, herMessage, chosenReply, rating } = req.body;
   const stage = STAGES[req.body.stage] ? req.body.stage : DEFAULT_STAGE;
 
-  if (!herMessage || !chosenReply || ![1, -1].includes(rating)) {
+  if (typeof herMessage !== 'string' || typeof chosenReply !== 'string' || ![1, -1].includes(rating)
+      || !herMessage || !chosenReply || herMessage.length > MAX_TEXT || chosenReply.length > MAX_TEXT
+      || (vibe != null && (typeof vibe !== 'string' || vibe.length > 50))) {
     return res.status(400).json({ error: "Feedback invalide." });
   }
   if (!process.env.DATABASE_URL) {
@@ -348,7 +423,7 @@ app.post('/api/feedback', async (req, res) => {
 });
 
 // Route pour récupérer l'historique récent
-app.get('/api/history', async (req, res) => {
+app.get('/api/history', requireAuth, async (req, res) => {
   try {
     if (!process.env.DATABASE_URL) return res.json([]);
     const result = await pool.query('SELECT * FROM wingman_history ORDER BY created_at DESC LIMIT 20');

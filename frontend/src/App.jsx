@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { Copy, Send, Loader2, Check, RefreshCw, ThumbsUp, ThumbsDown } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Copy, Send, Loader2, Check, RefreshCw, ThumbsUp, ThumbsDown, LogOut } from 'lucide-react';
 import WingmanLogo from './components/WingmanLogo';
+import LoginScreen from './components/LoginScreen';
 
 const STAGES = [
   { id: 'Match / Début', label: 'Match / Début' },
@@ -19,6 +20,8 @@ const VIBES = [
 const API_URL = import.meta.env.VITE_API_URL || '';
 
 export default function WingmanApp() {
+  // null = vérification en cours, false = connexion requise, true = connecté
+  const [authenticated, setAuthenticated] = useState(null);
   const [context, setContext] = useState('');
   const [herMessage, setHerMessage] = useState('');
   const [selectedStage, setSelectedStage] = useState('Flirt / Date');
@@ -30,6 +33,19 @@ export default function WingmanApp() {
   const [ratings, setRatings] = useState({});
   const [copiedIndex, setCopiedIndex] = useState(null);
   const [error, setError] = useState(null);
+
+  useEffect(() => {
+    fetch(`${API_URL}/api/session`)
+      .then((r) => r.json())
+      .then((d) => setAuthenticated(Boolean(d.authenticated)))
+      .catch(() => setAuthenticated(false));
+  }, []);
+
+  const logout = async () => {
+    await fetch(`${API_URL}/api/logout`, { method: 'POST' }).catch(() => {});
+    setResults(null);
+    setAuthenticated(false);
+  };
 
   const generate = async (request, regenerate = false) => {
     setIsLoading(true);
@@ -46,6 +62,10 @@ export default function WingmanApp() {
         })
       });
       const data = await response.json().catch(() => ({}));
+      if (response.status === 401) {
+        setAuthenticated(false);
+        return;
+      }
       if (!response.ok) {
         throw new Error(data.error || `Erreur serveur (${response.status})`);
       }
@@ -87,6 +107,7 @@ export default function WingmanApp() {
           rating
         })
       });
+      if (response.status === 401) setAuthenticated(false);
       if (!response.ok) throw new Error(`Erreur serveur (${response.status})`);
     } catch (err) {
       console.error("Erreur feedback:", err);
@@ -100,6 +121,15 @@ export default function WingmanApp() {
     setTimeout(() => setCopiedIndex(null), 2000);
   };
 
+  if (authenticated === null) {
+    return (
+      <div className="min-h-screen bg-[#050505] flex items-center justify-center">
+        <Loader2 className="w-6 h-6 text-[#C8A84B] animate-spin" aria-label="Chargement" />
+      </div>
+    );
+  }
+  if (!authenticated) return <LoginScreen apiUrl={API_URL} onSuccess={() => setAuthenticated(true)} />;
+
   return (
     <div className="min-h-screen bg-[#050505] text-gray-300 font-sans p-4 md:p-8">
       <div className="max-w-md mx-auto space-y-8">
@@ -110,9 +140,14 @@ export default function WingmanApp() {
             <WingmanLogo size={28} className="shrink-0 drop-shadow-[0_0_6px_rgba(200,168,75,0.35)]" />
             WINGMAN
           </h1>
-          <span className="text-xs uppercase tracking-widest text-[#C8A84B] bg-[#C8A84B]/10 px-2.5 py-1 rounded border border-[#C8A84B]/30">
-            V2.0 PRO
-          </span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs uppercase tracking-widest text-[#C8A84B] bg-[#C8A84B]/10 px-2.5 py-1 rounded border border-[#C8A84B]/30">
+              V2.0 PRO
+            </span>
+            <button onClick={logout} aria-label="Se déconnecter" title="Se déconnecter" className="text-gray-600 hover:text-gray-400 transition-colors">
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
         </header>
 
         {/* Input Section */}

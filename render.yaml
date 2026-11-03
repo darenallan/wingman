@@ -7,6 +7,12 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      # Mot de passe de l'app (12 caractères min.) : à saisir dans le tableau de bord
+      - key: WINGMAN_PASSWORD
+        sync: false
+      # Signature des sessions, générée par Render
+      - key: SESSION_SECRET
+        generateValue: true
       - key: DATABASE_URL
         sync: false
       - key: AI_API_KEY
