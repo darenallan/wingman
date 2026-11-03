@@ -18,11 +18,13 @@ export default function WingmanApp() {
   const [isLoading, setIsLoading] = useState(false);
   const [results, setResults] = useState(null);
   const [copiedIndex, setCopiedIndex] = useState(null);
+  const [error, setError] = useState(null);
 
   const handleGenerate = async () => {
     if (!herMessage.trim()) return;
     setIsLoading(true);
-    
+    setError(null);
+
     try {
       const response = await fetch(`${API_URL}/api/generate`, {
         method: 'POST',
@@ -33,10 +35,15 @@ export default function WingmanApp() {
           vibe: selectedVibe
         })
       });
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || `Erreur serveur (${response.status})`);
+      }
       setResults(data);
-    } catch (error) {
-      console.error("Erreur API:", error);
+    } catch (err) {
+      console.error("Erreur API:", err);
+      setResults(null);
+      setError(err.message || "Impossible de contacter le serveur.");
     } finally {
       setIsLoading(false);
     }
@@ -115,6 +122,12 @@ export default function WingmanApp() {
             {isLoading ? 'Analyse tactique...' : 'Générer la répartie'}
           </button>
         </section>
+
+        {error && (
+          <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded-lg p-3">
+            {error}
+          </p>
+        )}
 
         {/* Results Section */}
         {results && (
