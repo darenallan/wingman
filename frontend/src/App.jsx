@@ -1,6 +1,13 @@
 import React, { useState } from 'react';
-import { Copy, Send, Loader2, Check } from 'lucide-react';
+import { Copy, Send, Loader2, Check, RefreshCw, ThumbsUp, ThumbsDown } from 'lucide-react';
 import WingmanLogo from './components/WingmanLogo';
+
+const STAGES = [
+  { id: 'Match / Début', label: 'Match / Début' },
+  { id: 'Flirt / Date', label: 'Flirt / Date' },
+  { id: 'Couple', label: 'Couple' },
+  { id: 'Ex / Froid', label: 'Ex / Froid' }
+];
 
 const VIBES = [
   { id: 'Provocateur', label: 'Provocateur' },
@@ -14,14 +21,17 @@ const API_URL = import.meta.env.VITE_API_URL || '';
 export default function WingmanApp() {
   const [context, setContext] = useState('');
   const [herMessage, setHerMessage] = useState('');
+  const [selectedStage, setSelectedStage] = useState('Flirt / Date');
   const [selectedVibe, setSelectedVibe] = useState('Provocateur');
   const [isLoading, setIsLoading] = useState(false);
   const [results, setResults] = useState(null);
+  // Paramètres de la dernière génération (pour Régénérer et le feedback)
+  const [lastRequest, setLastRequest] = useState(null);
+  const [ratings, setRatings] = useState({});
   const [copiedIndex, setCopiedIndex] = useState(null);
   const [error, setError] = useState(null);
 
-  const handleGenerate = async () => {
-    if (!herMessage.trim()) return;
+  const generate = async (request, regenerate = false) => {
     setIsLoading(true);
     setError(null);
 
@@ -30,9 +40,9 @@ export default function WingmanApp() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          context,
-          herMessage,
-          vibe: selectedVibe
+          ...request,
+          regenerate,
+          previousReplies: regenerate ? results?.options?.map(o => o.text) ?? [] : []
         })
       });
       const data = await response.json().catch(() => ({}));
@@ -40,12 +50,47 @@ export default function WingmanApp() {
         throw new Error(data.error || `Erreur serveur (${response.status})`);
       }
       setResults(data);
+      setLastRequest(request);
+      setRatings({});
     } catch (err) {
       console.error("Erreur API:", err);
-      setResults(null);
+      if (!regenerate) setResults(null);
       setError(err.message || "Impossible de contacter le serveur.");
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleGenerate = () => {
+    if (!herMessage.trim()) return;
+    generate({ context, herMessage, vibe: selectedVibe, stage: selectedStage });
+  };
+
+  const handleRegenerate = () => {
+    if (lastRequest) generate(lastRequest, true);
+  };
+
+  const sendFeedback = async (option, index, rating) => {
+    if (!lastRequest || ratings[index] === rating) return;
+    const previous = ratings[index];
+    setRatings(r => ({ ...r, [index]: rating }));
+
+    try {
+      const response = await fetch(`${API_URL}/api/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stage: lastRequest.stage,
+          vibe: option.tone,
+          herMessage: lastRequest.herMessage,
+          chosenReply: option.text,
+          rating
+        })
+      });
+      if (!response.ok) throw new Error(`Erreur serveur (${response.status})`);
+    } catch (err) {
+      console.error("Erreur feedback:", err);
+      setRatings(r => ({ ...r, [index]: previous }));
     }
   };
 
@@ -58,7 +103,7 @@ export default function WingmanApp() {
   return (
     <div className="min-h-screen bg-[#050505] text-gray-300 font-sans p-4 md:p-8">
       <div className="max-w-md mx-auto space-y-8">
-        
+
         {/* Header Luxury Tech */}
         <header className="flex items-center justify-between border-b border-[#1A1A1A] pb-4">
           <h1 className="text-2xl font-bold tracking-wider text-[#DCAB6B] flex items-center gap-2">
@@ -72,9 +117,28 @@ export default function WingmanApp() {
 
         {/* Input Section */}
         <section className="space-y-6">
+          <div className="space-y-3">
+            <label className="text-xs uppercase tracking-widest text-gray-500">Situation</label>
+            <div className="grid grid-cols-2 gap-3">
+              {STAGES.map((stage) => (
+                <button
+                  key={stage.id}
+                  onClick={() => setSelectedStage(stage.id)}
+                  className={`p-2.5 text-xs font-medium rounded-lg border transition-all ${
+                    selectedStage === stage.id
+                      ? 'border-[#C8A84B] text-[#C8A84B] bg-[#C8A84B]/10 shadow-[0_0_15px_rgba(200,168,75,0.15)]'
+                      : 'border-[#1A1A1A] bg-[#09090b] text-gray-500 hover:border-gray-700'
+                  }`}
+                >
+                  {stage.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="space-y-2">
             <label className="text-xs uppercase tracking-widest text-gray-500">Contexte (Optionnel)</label>
-            <input 
+            <input
               type="text"
               value={context}
               onChange={(e) => setContext(e.target.value)}
@@ -84,12 +148,12 @@ export default function WingmanApp() {
           </div>
 
           <div className="space-y-2">
-            <label className="text-xs uppercase tracking-widest text-gray-500">Son dernier message</label>
-            <textarea 
+            <label className="text-xs uppercase tracking-widest text-gray-500">Échanges récents / Son message</label>
+            <textarea
               value={herMessage}
               onChange={(e) => setHerMessage(e.target.value)}
-              placeholder="Colle son message ici..."
-              rows="3"
+              placeholder="Colle son dernier message ou les 4-5 dernières répliques de la discussion..."
+              rows="4"
               className="w-full bg-[#0F0F0F] border border-[#1A1A1A] rounded-lg p-3 text-sm text-gray-200 focus:outline-none focus:border-[#C8A84B] transition-colors resize-none"
             />
           </div>
@@ -102,8 +166,8 @@ export default function WingmanApp() {
                   key={vibe.id}
                   onClick={() => setSelectedVibe(vibe.id)}
                   className={`p-2.5 text-xs font-medium rounded-lg border transition-all ${
-                    selectedVibe === vibe.id 
-                      ? 'border-[#C8A84B] text-[#C8A84B] bg-[#C8A84B]/10 shadow-[0_0_15px_rgba(200,168,75,0.15)]' 
+                    selectedVibe === vibe.id
+                      ? 'border-[#C8A84B] text-[#C8A84B] bg-[#C8A84B]/10 shadow-[0_0_15px_rgba(200,168,75,0.15)]'
                       : 'border-[#1A1A1A] bg-[#09090b] text-gray-500 hover:border-gray-700'
                   }`}
                 >
@@ -113,7 +177,7 @@ export default function WingmanApp() {
             </div>
           </div>
 
-          <button 
+          <button
             onClick={handleGenerate}
             disabled={!herMessage.trim() || isLoading}
             className="w-full bg-gradient-to-r from-[#C8A84B] to-[#DCAB6B] text-[#050505] font-bold tracking-wider uppercase py-3.5 rounded-lg flex items-center justify-center gap-2 hover:opacity-95 transition-all disabled:opacity-40 shadow-lg"
@@ -132,7 +196,19 @@ export default function WingmanApp() {
         {/* Results Section */}
         {results && (
           <section className="space-y-6 pt-6 border-t border-[#1A1A1A]">
-            
+
+            <div className="flex items-center justify-between">
+              <h2 className="text-xs uppercase tracking-widest text-gray-500">Répliques</h2>
+              <button
+                onClick={handleRegenerate}
+                disabled={isLoading}
+                className="flex items-center gap-1.5 text-xs text-[#C8A84B] border border-[#C8A84B]/30 bg-[#C8A84B]/10 px-2.5 py-1 rounded hover:border-[#C8A84B] transition-colors disabled:opacity-40"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+                Régénérer
+              </button>
+            </div>
+
             <div className="bg-[#0F0F0F] border-l-2 border-[#C8A84B] p-3.5 rounded-r-lg">
               <p className="text-xs text-gray-300 leading-relaxed">
                 <span className="text-[#DCAB6B] font-semibold uppercase tracking-wider block mb-1">Analyse du sous-texte :</span>
@@ -147,19 +223,35 @@ export default function WingmanApp() {
                     <span className="text-[10px] font-semibold uppercase tracking-wider text-[#C8A84B] bg-[#C8A84B]/10 px-2.5 py-1 rounded">
                       {option.tone}
                     </span>
-                    <button 
-                      onClick={() => copyToClipboard(option.text, index)}
-                      className="text-gray-400 hover:text-[#DCAB6B] transition-colors flex items-center gap-1 text-xs"
-                    >
-                      {copiedIndex === index ? (
-                        <>
-                          <Check className="w-4 h-4 text-emerald-400" />
-                          <span className="text-emerald-400">Copié</span>
-                        </>
-                      ) : (
-                        <Copy className="w-4 h-4" />
-                      )}
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => sendFeedback(option, index, 1)}
+                        aria-label="Bonne réponse"
+                        className={`transition-colors ${ratings[index] === 1 ? 'text-[#C8A84B]' : 'text-gray-600 hover:text-gray-400'}`}
+                      >
+                        <ThumbsUp className="w-4 h-4" fill={ratings[index] === 1 ? 'currentColor' : 'none'} />
+                      </button>
+                      <button
+                        onClick={() => sendFeedback(option, index, -1)}
+                        aria-label="Mauvaise réponse"
+                        className={`transition-colors ${ratings[index] === -1 ? 'text-red-400/80' : 'text-gray-600 hover:text-gray-400'}`}
+                      >
+                        <ThumbsDown className="w-4 h-4" fill={ratings[index] === -1 ? 'currentColor' : 'none'} />
+                      </button>
+                      <button
+                        onClick={() => copyToClipboard(option.text, index)}
+                        className="text-gray-400 hover:text-[#DCAB6B] transition-colors flex items-center gap-1 text-xs"
+                      >
+                        {copiedIndex === index ? (
+                          <>
+                            <Check className="w-4 h-4 text-emerald-400" />
+                            <span className="text-emerald-400">Copié</span>
+                          </>
+                        ) : (
+                          <Copy className="w-4 h-4" />
+                        )}
+                      </button>
+                    </div>
                   </div>
                   <p className="text-sm text-gray-100 font-medium mb-3 leading-relaxed">{option.text}</p>
                   <p className="text-[11px] text-gray-500 border-t border-[#1A1A1A] pt-2">

@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import pkg from 'pg';
 import path from 'path';
+import { readFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 const { Pool } = pkg;
 
@@ -24,10 +25,31 @@ const pool = new Pool({
   ssl: { require: true }
 });
 
+// Migration automatique : schema.sql est idempotent (IF NOT EXISTS partout)
+async function initDb() {
+  if (!process.env.DATABASE_URL) return;
+  try {
+    const schema = await readFile(path.join(__dirname, 'schema.sql'), 'utf8');
+    await pool.query(schema);
+    console.log('Schéma Neon à jour.');
+  } catch (err) {
+    console.error('Erreur de migration Neon:', err);
+  }
+}
+
+// Consignes spécifiques à chaque situation (sélecteur "stage" du frontend)
+const STAGES = {
+  'Match / Début': "Intrigue maximale, ZÉRO validation gratuite, réponses courtes, défis légers pour sortir du lot. Il doit se démarquer de tous les autres mecs qui lui écrivent.",
+  'Flirt / Date': "Haute tension, Push-Pull assumé, sous-entendus, projection vers le face-à-face (\"quand on se verra\").",
+  'Couple': "PAS de jeu d'ego toxique ni de froideur inutile. Ton complice, protecteur, taquin affectueux, leader calme qui désamorce les caprices avec humour et charme.",
+  'Ex / Froid': "Détachement souverain, réponses courtes, mystérieuses, haute valeur perçue. Ne jamais montrer de manque ni chercher à convaincre."
+};
+const DEFAULT_STAGE = 'Flirt / Date';
+
 // Le Prompt Système V2 Complet
 const SYSTEM_PROMPT = `[ROLE ET OBJECTIF]
-Tu es un expert d'élite en dynamique sociale, en psychologie des relations et en copywriting persuasif. Ton rôle est d'agir comme le "Wingman" numérique de l'utilisateur. 
-L'utilisateur te fournira le dernier message reçu d'une femme, ainsi que le contexte de la conversation. Ton objectif est de générer des options de réponses percutantes, charismatiques et intelligentes qui créent de l'attraction, du mystère ou de la tension.
+Tu es un expert d'élite en dynamique sociale, en psychologie des relations et en copywriting persuasif. Ton rôle est d'agir comme le "Wingman" numérique de l'utilisateur.
+L'utilisateur te fournira son dernier message reçu d'une femme ou les dernières répliques de leur discussion, la situation de la relation et un éventuel contexte. Ton objectif est de générer des options de réponses percutantes, charismatiques et intelligentes qui créent de l'attraction, du mystère ou de la tension, calibrées sur la situation.
 
 [LES 5 RÈGLES D'OR DE LA COMMUNICATION]
 1. LA LOI DU MOINDRE EFFORT : Le message généré doit toujours sembler naturel et ne jamais donner l'impression que l'utilisateur s'est justifié ou a trop réfléchi. Ne jamais écrire de longs paragraphes. (Max 1 à 2 phrases).
@@ -36,12 +58,65 @@ L'utilisateur te fournira le dernier message reçu d'une femme, ainsi que le con
 4. SOUS-ENTENDU > EXPLICITE : Ne dis jamais les choses directement si tu peux les suggérer. Laisse son imagination faire le travail.
 5. ZERO "CRINGE" : Aucune phrase de drague lourde, aucun compliment excessif (simp), aucune vulgarité, aucune agressivité.
 
+[STYLE D'ÉCRITURE SMS - RÈGLES STRICTES]
+- STYLE SMS AUTHENTIQUE (ZÉRO STYLE "IA LITTÉRAIRE") : Écris comme un mec de 20 ans sûr de lui par message (WhatsApp/iMessage/Insta). Phrases directes, rythmées, parfois sans point final. Pas de tournures ampoulées ("Il semblerait que...", "Permets-moi de..."), pas de tirets cadratins (—), pas de point-virgule.
+- USAGE CALIBRÉ DES EMOJIS : Pas d'emoji à chaque phrase. Quand tu en mets, utilise UNIQUEMENT ceux-ci : 🤣🤣 (souvent doublé ou triplé pour se moquer gentiment), 😌 (confiance calme / arrogance douce), 👀 (intrigue / sous-entendu), 😉 (clin d'œil complice). Interdiction absolue d'utiliser 😂, 😜, 🙈, 🔥.
+- MIROIR DE LONGUEUR : Si son message fait 4 mots, réponds en 1 phrase sèche et percutante (max 10-15 mots). Ne jamais écrire de pavé.
+- ANTI-RÉPÉTITION : Interdiction formelle de réutiliser mot pour mot les phrases des exemples fournis dans ce prompt. Capte l'esprit, le rythme et la répartie, ne plagie jamais les exemples.
+
 [CATÉGORIES DE TONS (VIBES)]
 Tu dois toujours générer 4 options distinctes correspondant à ces 4 profils psychologiques :
 - "Provocateur" (Taquin, défiant, renverse la situation, la disqualifie gentiment).
 - "Arrogant Charmeur" (Cocky/Funny, confiance absolue, humour au second degré).
 - "Mystérieux" (Réponse courte, intrigante, qui la force à poser une question ou à s'investir).
 - "Recadrage / Pragmatique" (Utilisé quand elle fait un test ou fait des manières. Calme, stoïque, ramène à la réalité avec un sourire en coin).
+La vibe prioritaire indiquée par l'utilisateur doit être la plus soignée des 4.
+
+[EXEMPLES RÉELS DE CALIBRAGE - NE JAMAIS LES COPIER]
+
+EXEMPLE 1 (Situation : Flirt / Début - Elle joue la fille sage pour esquiver)
+Historique récent :
+Moi : "Je suis en cours là"
+Elle : "😭😭 faut te concentrer sur ton cours"
+Analyse : "Elle fait mine d'être raisonnable mais cherche surtout à voir si elle a de l'effet sur toi."
+- [Provocateur] : "Tu essaies de m'esquiver pour gagner du temps et revoir ta stratégie ? Bien essayé 🤣"
+- [Arrogant Charmeur] : "T'inquiète pas pour ça je suis multitâche, je peux très bien suivre le cours et te perturber en même temps"
+- [Mystérieux] : "Trop tard, le prof a déjà perdu la bataille"
+- [Recadrage] : "Le prof est beaucoup moins captivant que notre petite guerre, assume ton rôle de distraction 😌"
+
+EXEMPLE 2 (Situation : Tension / Push-Pull - Escalade vers le face-à-face)
+Historique récent :
+Moi : "Garde cette énergie tu vas en avoir besoin on verra si tu te bats aussi bien quand on sera face à face🤣🤣"
+Elle : "On dirait que ça va être très mal barré pour moi"
+Moi : "Ça dépend si tu es sage"
+Elle : "C'est que c'est déjà gâté 🤣"
+Analyse : "Elle valide totalement le jeu de tension et assume son côté rebelle."
+- [Provocateur] : "Si c'est déjà gâté par message j'imagine même pas le désastre quand on sera face à face 🤣"
+- [Arrogant Charmeur] : "Parfait, les filles trop sages c'est ennuyeux à mourir de toute façon. J'aime bien les problèmes"
+- [Mystérieux] : "Si tu refuses d'être sage les règles du jeu changent... et je pense pas que tu sois prête pour cette version-là 😌"
+- [Recadrage] : "Au moins tu es lucide sur ton cas, c'est déjà un bon début"
+
+EXEMPLE 3 (Situation : Shit-test / Fausse innocence - Elle joue la victime ou l'ange)
+Historique récent :
+Elle : "😔😔on dit non à la violence sur mineur, si tu me tapes je porte plainte"
+Moi : "Mineure ? Ne sors pas la carte de la petite fille innocente on sait très bien que c'est toi le vrai danger ici🤣🤣🤣"
+Elle : "Moi je ne vois pas de quoi tu parles, je suis un amour 🙂‍↔️"
+Analyse : "Elle joue la carte de l'innocence feinte pour te faire réagir et garder le contrôle."
+- [Provocateur] : "Même ton clavier a dû transpirer pour écrire un mensonge pareil 🤣"
+- [Arrogant Charmeur] : "Un amour avec un grand A... comme Arnaque ? 😌"
+- [Mystérieux] : "C'est exactement ce que disent les pires démons avant de frapper, je t'ai à l'œil 👀"
+- [Recadrage] : "On verra si tu arrives à garder cette petite tête d'ange en face de moi, j'ai de gros doutes"
+
+EXEMPLE 4 (Situation : Contrôle & Intérêt sincère - Elle alterne défi et vraie question)
+Historique récent :
+Elle : "Parce que j'en ai décidé ainsi 🙂‍↔️"
+Moi : "🤣🤣oui ça je sais être patient dans certaines situations"
+Elle : "Comme lesquelles 👀 / Non mais plus sérieusement pourquoi tu ne dors pas"
+Analyse : "Double dynamique : elle teste ton autorité puis baisse sa garde en s'intéressant sincèrement à ton mode de vie."
+- [Provocateur] : "C'est très mignon que tu penses avoir le pouvoir de décision ici, je te laisse y croire pour aujourd'hui 😌"
+- [Arrogant Charmeur] : "Je construis mon empire pendant que les autres dorment. Quand j'ai un projet en tête mon cerveau refuse de se mettre sur pause"
+- [Mystérieux] : "Tu es beaucoup trop curieuse... disons que je sais exactement quand accélérer et quand prendre mon temps 👀"
+- [Recadrage] : "Je bosse sur mes affaires, mais j'avoue que te taquiner un peu m'aide aussi à rester éveillé 😉"
 
 [FORMAT DE SORTIE OBLIGATOIRE]
 Tu es une API. Tu ne dois générer QUE du JSON valide, sans aucun texte avant ou après, ni balises markdown \`\`\`json. Le JSON doit suivre exactement cette structure :
@@ -71,6 +146,43 @@ Tu es une API. Tu ne dois générer QUE du JSON valide, sans aucun texte avant o
     }
   ]
 }`;
+
+// Prompt final = base + consigne de situation + meilleures réponses notées 👍
+function buildSystemPrompt(stage, topReplies) {
+  let prompt = `${SYSTEM_PROMPT}
+
+[SITUATION ACTUELLE : ${stage}]
+${STAGES[stage]}`;
+
+  if (topReplies.length > 0) {
+    const examples = topReplies
+      .map(r => `Elle : "${r.her_message}"\n- [${r.vibe || 'Réponse'}] : "${r.chosen_reply}"`)
+      .join('\n\n');
+    prompt += `
+
+[TES MEILLEURES RÉPONSES PRÉCÉDENTES VALIDÉES PAR L'UTILISATEUR - INSPIRE-TOI DE CE CALIBRAGE]
+${examples}`;
+  }
+  return prompt;
+}
+
+// Les 3 réponses 👍 les plus récentes, en priorité celles de la même situation
+async function getTopReplies(stage) {
+  if (!process.env.DATABASE_URL) return [];
+  try {
+    const result = await pool.query(
+      `SELECT her_message, chosen_reply, vibe FROM wingman_feedback
+       WHERE rating = 1
+       ORDER BY (stage = $1) DESC, created_at DESC
+       LIMIT 3`,
+      [stage]
+    );
+    return result.rows;
+  } catch (err) {
+    console.error('Erreur de lecture du feedback Neon:', err);
+    return [];
+  }
+}
 
 // Fournisseurs compatibles avec le format OpenAI Chat Completions, détectés via le préfixe de la clé
 const AI_PROVIDERS = {
@@ -109,8 +221,15 @@ function resolveAIConfig() {
 }
 
 // Fonction d'appel à l'API (Compatible OpenAI / Groq / Gemini via le format Chat Completions)
-async function callAI(context, herMessage, desiredVibe) {
-  const userPrompt = `Contexte : ${context || "Aucun contexte spécifique."}\nDernier message reçu : "${herMessage}"\nVibe prioritaire souhaitée : ${desiredVibe || "Toutes"}\n\nGénère le JSON strict.`;
+async function callAI({ context, herMessage, vibe, stage, regenerate, previousReplies }) {
+  let userPrompt = `Situation : ${stage}\nContexte : ${context || "Aucun contexte spécifique."}\nÉchanges récents / son message :\n${herMessage}\n\nVibe prioritaire souhaitée : ${vibe || "Toutes"}`;
+  if (regenerate) {
+    userPrompt += `\n\nPropose 4 angles totalement différents de la génération précédente.`;
+    if (previousReplies.length > 0) {
+      userPrompt += ` Réponses déjà proposées à ne pas reprendre :\n${previousReplies.map(r => `- "${r}"`).join('\n')}`;
+    }
+  }
+  userPrompt += `\n\nGénère le JSON strict.`;
 
   const ai = resolveAIConfig();
   if (!ai) {
@@ -120,27 +239,29 @@ async function callAI(context, herMessage, desiredVibe) {
       options: [
         {
           tone: "Provocateur",
-          text: "C'est mignon que tu penses avoir le dernier mot ici. Je te laisse rêver encore un peu. 😌",
+          text: "C'est mignon que tu penses avoir le dernier mot ici. Je te laisse rêver encore un peu 😌",
           explanation: "Inverse la dynamique de pouvoir avec humour sans s'énerver."
         },
         {
           tone: "Arrogant Charmeur",
-          text: "Attention, tu commences déjà à t'attacher. Respire, tout va bien se passer.",
+          text: "Attention tu commences déjà à t'attacher. Respire, tout va bien se passer",
           explanation: "Projette sur elle l'intérêt et crée une tension amusante."
         },
         {
           tone: "Mystérieux",
-          text: "Tu es bien trop curieuse... Chaque chose en son temps.",
+          text: "Tu es bien trop curieuse... chaque chose en son temps 👀",
           explanation: "Crée un manque d'information qui la pousse à relancer."
         },
         {
           tone: "Recadrage / Pragmatique",
-          text: "J'aime bien ton audace, mais il va falloir faire plus d'efforts que ça pour m'impressionner.",
+          text: "J'aime bien ton audace, mais il va falloir faire plus d'efforts que ça pour m'impressionner",
           explanation: "Valide son énergie (Pull) tout en haussant tes standards (Push)."
         }
       ]
     };
   }
+
+  const topReplies = await getTopReplies(stage);
 
   const response = await fetch(ai.baseUrl, {
     method: 'POST',
@@ -152,10 +273,10 @@ async function callAI(context, herMessage, desiredVibe) {
       model: ai.model,
       response_format: { type: "json_object" },
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: buildSystemPrompt(stage, topReplies) },
         { role: 'user', content: userPrompt }
       ],
-      temperature: 0.8
+      temperature: regenerate ? 0.95 : 0.85
     })
   });
 
@@ -172,21 +293,25 @@ async function callAI(context, herMessage, desiredVibe) {
 
 // Route principale pour générer la réponse
 app.post('/api/generate', async (req, res) => {
-  const { context, herMessage, vibe } = req.body;
+  const { context, herMessage, vibe, regenerate } = req.body;
+  const stage = STAGES[req.body.stage] ? req.body.stage : DEFAULT_STAGE;
+  const previousReplies = Array.isArray(req.body.previousReplies)
+    ? req.body.previousReplies.filter(r => typeof r === 'string').slice(0, 8)
+    : [];
 
   if (!herMessage) {
     return res.status(400).json({ error: "Le message reçu est requis." });
   }
 
   try {
-    const aiResult = await callAI(context, herMessage, vibe);
+    const aiResult = await callAI({ context, herMessage, vibe, stage, regenerate: Boolean(regenerate), previousReplies });
 
     // Sauvegarde asynchrone dans Neon (PostgreSQL) si DATABASE_URL est défini
     if (process.env.DATABASE_URL) {
       pool.query(
-        `INSERT INTO wingman_history (context, her_message, target_vibe, ai_response) 
-         VALUES ($1, $2, $3, $4)`,
-        [context, herMessage, vibe, JSON.stringify(aiResult)]
+        `INSERT INTO wingman_history (context, her_message, target_vibe, stage, ai_response)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [context, herMessage, vibe, stage, JSON.stringify(aiResult)]
       ).catch(err => console.error("Erreur d'insertion Neon:", err));
     }
 
@@ -194,6 +319,31 @@ app.post('/api/generate', async (req, res) => {
   } catch (error) {
     console.error("Erreur de génération:", error);
     res.status(500).json({ error: "Erreur lors de la génération de la réponse." });
+  }
+});
+
+// Route pour noter une réponse (👍 = 1, 👎 = -1)
+app.post('/api/feedback', async (req, res) => {
+  const { vibe, herMessage, chosenReply, rating } = req.body;
+  const stage = STAGES[req.body.stage] ? req.body.stage : DEFAULT_STAGE;
+
+  if (!herMessage || !chosenReply || ![1, -1].includes(rating)) {
+    return res.status(400).json({ error: "Feedback invalide." });
+  }
+  if (!process.env.DATABASE_URL) {
+    return res.status(503).json({ error: "Base de données non configurée." });
+  }
+
+  try {
+    await pool.query(
+      `INSERT INTO wingman_feedback (stage, vibe, her_message, chosen_reply, rating)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [stage, vibe, herMessage, chosenReply, rating]
+    );
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("Erreur d'enregistrement du feedback:", error);
+    res.status(500).json({ error: "Erreur lors de l'enregistrement du feedback." });
   }
 });
 
@@ -214,6 +364,8 @@ app.get('*', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Wingman V2 API en ligne sur le port ${PORT}`);
+initDb().finally(() => {
+  app.listen(PORT, () => {
+    console.log(`Wingman V2 API en ligne sur le port ${PORT}`);
+  });
 });
