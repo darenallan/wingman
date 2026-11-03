@@ -2,13 +2,21 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import pkg from 'pg';
+import path from 'path';
+import { fileURLToPath } from 'url';
 const { Pool } = pkg;
 
 dotenv.config();
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const FRONTEND_DIST = path.join(__dirname, '../frontend/dist');
+
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Sert le build statique du frontend React
+app.use(express.static(FRONTEND_DIST));
 
 // Connexion à Neon (PostgreSQL)
 const pool = new Pool({
@@ -198,6 +206,11 @@ app.get('/api/history', async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: "Erreur lors de la récupération de l'historique." });
   }
+});
+
+// Catch-all : toute autre route renvoie l'app React
+app.get('*', (req, res) => {
+  res.sendFile(path.join(FRONTEND_DIST, 'index.html'));
 });
 
 const PORT = process.env.PORT || 3000;

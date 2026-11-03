@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Copy, Sparkles, Send, Loader2, Check } from 'lucide-react';
+import { Copy, Send, Loader2, Check } from 'lucide-react';
+import WingmanLogo from './components/WingmanLogo';
 
 const VIBES = [
   { id: 'Provocateur', label: 'Provocateur' },
@@ -8,7 +9,7 @@ const VIBES = [
   { id: 'Recadrage', label: 'Recadrage' }
 ];
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+const API_URL = import.meta.env.VITE_API_URL || '';
 
 export default function WingmanApp() {
   const [context, setContext] = useState('');
@@ -54,7 +55,7 @@ export default function WingmanApp() {
         {/* Header Luxury Tech */}
         <header className="flex items-center justify-between border-b border-[#1A1A1A] pb-4">
           <h1 className="text-2xl font-bold tracking-wider text-[#DCAB6B] flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-[#C8A84B]" />
+            <WingmanLogo size={28} className="shrink-0 drop-shadow-[0_0_6px_rgba(200,168,75,0.35)]" />
             WINGMAN
           </h1>
           <span className="text-xs uppercase tracking-widest text-[#C8A84B] bg-[#C8A84B]/10 px-2.5 py-1 rounded border border-[#C8A84B]/30">
